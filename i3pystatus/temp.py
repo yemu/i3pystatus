@@ -15,11 +15,12 @@ class Temperature(IntervalModule):
     settings = (
         ("format",
          "format string used for output. {temp} is the temperature in degrees celsius, {critical} and {high} are the trip point temps."),
-        "color", "color_critical", "high_factor"
+        "color", "color_critical", "high_factor", "icon", "icon_color"
     )
     format = "{temp} °C"
     high_factor = 0.7
-    color = "#FFFFFF"
+    color = "#DDDDDD"
+    icon_color = "#FFFFFF"
     color_high = "#FFFF00"
     color_critical = "#FF0000"
 
@@ -52,4 +53,6 @@ class Temperature(IntervalModule):
             "full_text": self.format.format(temp=temp, critical=self.critical, high=self.high),
             "urgent": urgent,
             "color": color,
+            "icon": self.icon,
+            "icon_color": self.icon_color,
         }

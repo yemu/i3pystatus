@@ -5,12 +5,11 @@ import re
 import configparser
 
 from i3pystatus import IntervalModule, formatp
-from i3pystatus.core.util import PrefixedKeyDict, lchop, TimeWrapper
-from i3pystatus.core.desktop import display_notification
+from i3pystatus.core.util import lchop, TimeWrapper
+from i3pystatus.core.desktop import DesktopNotification
 
 
 class UEventParser(configparser.ConfigParser):
-
     @staticmethod
     def parse_file(file):
         parser = UEventParser()
@@ -29,73 +28,69 @@ class UEventParser(configparser.ConfigParser):
 
 
 class Battery:
-
     @staticmethod
     def create(from_file):
-        batinfo = UEventParser.parse_file(from_file)
-        if "POWER_NOW" in batinfo:
-            return BatteryEnergy(batinfo)
+        battery_info = UEventParser.parse_file(from_file)
+        if "POWER_NOW" in battery_info:
+            return BatteryEnergy(battery_info)
         else:
-            return BatteryCharge(batinfo)
+            return BatteryCharge(battery_info)
 
-    def __init__(self, batinfo):
-        self.bat = batinfo
-        self.normalize_µ()
+    def __init__(self, battery_info):
+        self.battery_info = battery_info
+        self.normalize_micro()
 
-    def normalize_µ(self):
-        for key, µvalue in self.bat.items():
+    def normalize_micro(self):
+        for key, micro_value in self.battery_info.items():
             if re.match(r"(VOLTAGE|CHARGE|CURRENT|POWER|ENERGY)_(NOW|FULL|MIN)(_DESIGN)?", key):
-                self.bat[key] = float(µvalue) / 1000000.0
+                self.battery_info[key] = float(micro_value) / 1000000.0
 
     def percentage(self, design=False):
         return self._percentage("_DESIGN" if design else "") * 100
 
     def status(self):
         if self.consumption():
-            return "Discharging" if self.bat["STATUS"] == "Discharging" else "Charging"
+            return "Discharging" if self.battery_info["STATUS"] == "Discharging" else "Charging"
         else:
             return "Full"
 
 
 class BatteryCharge(Battery):
-
     def consumption(self):
-        return self.bat["VOLTAGE_NOW"] * self.bat["CURRENT_NOW"]  # V  * A = W
+        return self.battery_info["VOLTAGE_NOW"] * self.battery_info["CURRENT_NOW"]  # V  * A = W
 
     def _percentage(self, design):
-        return self.bat["CHARGE_NOW"] / self.bat["CHARGE_FULL" + design]
+        return self.battery_info["CHARGE_NOW"] / self.battery_info["CHARGE_FULL" + design]
 
     def remaining(self):
         if self.status() == "Discharging":
             # Ah / A = h * 60 min = min
-            return self.bat["CHARGE_NOW"] / self.bat["CURRENT_NOW"] * 60
+            return self.battery_info["CHARGE_NOW"] / self.battery_info["CURRENT_NOW"] * 60
         else:
-            return (self.bat["CHARGE_FULL"] - self.bat["CHARGE_NOW"]) / self.bat["CURRENT_NOW"] * 60
+            return (self.battery_info["CHARGE_FULL"] - self.battery_info["CHARGE_NOW"]) / self.battery_info["CURRENT_NOW"] * 60
 
 
 class BatteryEnergy(Battery):
-
     def consumption(self):
-        return self.bat["POWER_NOW"]
+        return self.battery_info["POWER_NOW"]
 
     def _percentage(self, design):
-        return self.bat["ENERGY_NOW"] / self.bat["ENERGY_FULL" + design]
+        return self.battery_info["ENERGY_NOW"] / self.battery_info["ENERGY_FULL" + design]
 
     def remaining(self):
         if self.status() == "Discharging":
             # Wh / W = h * 60 min = min
-            return self.bat["ENERGY_NOW"] / self.bat["POWER_NOW"] * 60
+            return self.battery_info["ENERGY_NOW"] / self.battery_info["POWER_NOW"] * 60
         else:
-            return (self.bat["ENERGY_FULL"] - self.bat["ENERGY_NOW"]) / self.bat["POWER_NOW"] * 60
+            return (self.battery_info["ENERGY_FULL"] - self.battery_info["ENERGY_NOW"]) / self.battery_info["POWER_NOW"] * 60
 
 
 class BatteryChecker(IntervalModule):
-
-    """ 
+    """
     This class uses the /sys/class/power_supply/…/uevent interface to check for the
     battery status
 
-    Available formatters for format and alert_format_\*:
+    Available formatters:
 
     * `{remaining}` — remaining time for charging or discharging, uses TimeWrapper formatting, default format is `%E%h:%M`
     * `{percentage}` — battery percentage relative to the last full value
@@ -110,12 +105,12 @@ class BatteryChecker(IntervalModule):
         "format",
         ("alert", "Display a libnotify-notification on low battery"),
         "alert_percentage",
-        ("alert_format_title",
-         "The title of the notification, all formatters can be used"),
-        ("alert_format_body",
-         "The body text of the notification, all formatters can be used"),
+        ("alert_format_title", "The title of the notification, all formatters can be used"),
+        ("alert_format_body", "The body text of the notification, all formatters can be used"),
         ("path", "Override the default-generated path"),
         ("status", "A dictionary mapping ('DIS', 'CHR', 'FULL') to alternative names"),
+        ("icon_full", "A dictionary mapping ('DIS', 'CHR', 'FULL') to alternative names"),
+        ("icon_half", "A dictionary mapping ('DIS', 'CHR', 'FULL') to alternative names"),
     )
     battery_ident = "BAT0"
     format = "{status} {remaining}"
@@ -127,8 +122,8 @@ class BatteryChecker(IntervalModule):
 
     alert = False
     alert_percentage = 10
-    alert_format_title = "Low battery"
-    alert_format_body = "Battery {battery_ident} has only {percentage:.2f}% ({remaining_hm}) remaining!"
+    alert_format_title = "Niski stan baterii"
+    alert_format_body = "Battery {battery_ident} has only {percentage:.2f}% ({remaining:%E%hh:%Mm}) remaining!"
 
     path = None
 
@@ -150,14 +145,18 @@ class BatteryChecker(IntervalModule):
             "consumption": battery.consumption(),
             "remaining": TimeWrapper(0, "%E%h:%M"),
         }
-
+        icon=self.icon_full
+        if fdict["percentage"] > 50 and fdict["percentage"] < 250:
+            icon = self.icon_full
+        elif fdict["percentage"] <= 50 and fdict["percentage"] > 10:
+            icon = self.icon_half
         status = battery.status()
-        if status in ["Discharging", "Charging"]:
+        if status in ["Charging", "Discharging"]:
             remaining = battery.remaining()
             fdict["remaining"] = TimeWrapper(remaining * 60, "%E%h:%M")
             if status == "Discharging":
                 fdict["status"] = "DIS"
-                if remaining < 15:
+                if battery.percentage() <= self.alert_percentage:
                     urgent = True
                     color = "#ff0000"
             else:
@@ -166,12 +165,13 @@ class BatteryChecker(IntervalModule):
             fdict["status"] = "FULL"
 
         if self.alert and fdict["status"] == "DIS" and fdict["percentage"] <= self.alert_percentage:
-            display_notification(
+            DesktopNotification(
                 title=formatp(self.alert_format_title, **fdict),
                 body=formatp(self.alert_format_body, **fdict),
                 icon="battery-caution",
                 urgency=2,
-            )
+                timeout=60,
+            ).display()
 
         fdict["status"] = self.status[fdict["status"]]
 
@@ -179,5 +179,6 @@ class BatteryChecker(IntervalModule):
             "full_text": formatp(self.format, **fdict).strip(),
             "instance": self.battery_ident,
             "urgent": urgent,
-            "color": color
+            "color": color,
+            "icon": icon
         }
